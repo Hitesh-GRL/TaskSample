@@ -1,1 +1,59 @@
+name: Automated Branch Sync
+
+on:
+  schedule:
+    - cron: '20 5 * * *'  # Runs daily at 10:50 IST (05:20 UTC)
+  workflow_dispatch:      # Allows manual trigger as well
+
+jobs:
+  sync-branches:
+    runs-on: ubuntu-latest
+
+    env:
+      SOURCE_BRANCH: b1
+      DEST_BRANCHES: b2,b3
+      LINE_THRESHOLD: 1
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Necessary to compare branches
+
+      - name: Install GitHub CLI
+        uses: cli/gh-action@v2
+
+      - name: Set Up Git Config
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Check for changes and create PRs
+        run: |
+          IFS=',' read -ra DESTS <<< "$DEST_BRANCHES"
+          for dest in "${DESTS[@]}"; do
+            echo "Checking changes from $SOURCE_BRANCH → $dest"
+            git fetch origin $SOURCE_BRANCH $dest
+
+            lines_changed=$(git diff origin/$dest..origin/$SOURCE_BRANCH --shortstat | awk '{print $4 + $6}')
+            echo "Total lines changed: $lines_changed"
+
+            if [[ "$lines_changed" -gt "$LINE_THRESHOLD" ]]; then
+              echo "Sync needed → Creating PR from $SOURCE_BRANCH to $dest"
+
+              PR_EXISTS=$(gh pr list --base $dest --head $SOURCE_BRANCH --json number --jq 'length')
+              if [[ "$PR_EXISTS" -eq "0" ]]; then
+                gh pr create \
+                  --base $dest \
+                  --head $SOURCE_BRANCH \
+                  --title "Sync: $SOURCE_BRANCH → $dest" \
+                  --body "Automated sync due to $lines_changed line changes." \
+                  --label "auto-sync"
+              else
+                echo "PR already exists for $SOURCE_BRANCH → $dest"
+              fi
+            else
+              echo "No sync needed for $SOURCE_BRANCH → $dest"
+            fi
+          done
 
