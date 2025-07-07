@@ -1,69 +1,120 @@
 name: Automated Branch Synchronization
 
 on:
+  push:
+    branches:
+      - b1           # Trigger auto-sync on commits to source
   schedule:
-    - cron: '47 6 * * *'   # Runs daily at 10:00 UTC
-  workflow_dispatch:        # Manual trigger
+    - cron: '0 2 * * *'  # Daily at 08:00 IST (2:00 UTC)
+  workflow_dispatch:     # Optional manual trigger
 
 env:
   SOURCE_BRANCH: b1
   DESTINATION_BRANCHES: b2,b3
-  LINES_CHANGED_THRESHOLD: 0
+  LINES_CHANGED_THRESHOLD: 100
 
 jobs:
-  auto-sync:
-    runs-on: ubuntu-latest
 
+  ##############################
+  # Job 1: Auto Sync on Push
+  ##############################
+  auto_sync:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for diff
+          fetch-depth: 0
 
-      - name: Set up Git config
+      - name: Git config
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
 
-      - name: Authenticate GitHub CLI using PAT
+      - name: Auth with PAT
         run: echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
 
-      - name: Compare and Sync Branches
+      - name: Auto Sync with Threshold Check
         run: |
           IFS=',' read -ra DESTS <<< "$DESTINATION_BRANCHES"
-
           for TARGET_BRANCH in "${DESTS[@]}"; do
-            echo "🔍 Checking diff: $SOURCE_BRANCH → $TARGET_BRANCH"
             git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
 
-            DIFF_STATS=$(git diff origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH --shortstat)
-            echo "Diff stats: $DIFF_STATS"
-
+            DIFF_STATS=$(git diff origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH --shortstat || echo "")
             ADDED=$(echo "$DIFF_STATS" | grep -oP '\d+(?= insertions)' || echo "0")
             DELETED=$(echo "$DIFF_STATS" | grep -oP '\d+(?= deletions)' || echo "0")
             TOTAL_CHANGED=$((ADDED + DELETED))
 
-            echo "📈 Total lines changed: $TOTAL_CHANGED"
+            echo "📈 $TARGET_BRANCH: $TOTAL_CHANGED lines changed"
 
             if [ "$TOTAL_CHANGED" -gt "$LINES_CHANGED_THRESHOLD" ]; then
-              echo "✅ Change threshold met: proceeding with PR."
-
               PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
-              if [[ "$PR_EXISTS" -eq "0" ]]; then
+              if [ "$PR_EXISTS" -eq "0" ]; then
                 gh pr create \
                   --base "$TARGET_BRANCH" \
                   --head "$SOURCE_BRANCH" \
-                  --title "🔄 Auto Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
-                  --body "Automated sync due to $TOTAL_CHANGED line changes.\n\nPlease review." \
+                  --title "🔄 Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
+                  --body "Auto-sync triggered due to $TOTAL_CHANGED lines changed." \
                   --label "auto-sync"
-              else
-                echo "ℹ️ PR already exists: $SOURCE_BRANCH → $TARGET_BRANCH"
               fi
             else
-              echo "❌ No sync needed for $TARGET_BRANCH — changes below threshold."
+              echo "🔕 Threshold not met for $TARGET_BRANCH"
             fi
+          done
+
+
+  ##############################
+  # Job 2: Daily PR if Mergeable
+  ##############################
+  daily_sync:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Git config
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Auth with PAT
+        run: echo "${{ secrets.PAT_TOKEN }}" | gh auth login --with-token
+
+      - name: Daily Sync if No Conflicts
+        run: |
+          IFS=',' read -ra DESTS <<< "$DESTINATION_BRANCHES"
+          for TARGET_BRANCH in "${DESTS[@]}"; do
+            git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
+            git checkout -b temp-merge origin/$TARGET_BRANCH
+
+            echo "🧪 Test merge $SOURCE_BRANCH into $TARGET_BRANCH"
+            if git merge --no-commit --no-ff origin/$SOURCE_BRANCH; then
+              echo "✅ No conflict: Creating PR..."
+
+              PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
+              if [ "$PR_EXISTS" -eq "0" ]; then
+                gh pr create \
+                  --base "$TARGET_BRANCH" \
+                  --head "$SOURCE_BRANCH" \
+                  --title "🔄 Daily Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
+                  --body "Conflict-free daily sync." \
+                  --label "auto-sync"
+              else
+                echo "ℹ️ PR already exists"
+              fi
+            else
+              echo "❌ Conflicts found: Skipping PR to $TARGET_BRANCH"
+            fi
+
+            git merge --abort || true
           done
