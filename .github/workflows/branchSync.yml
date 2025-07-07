@@ -2,13 +2,13 @@ name: Automated Branch Synchronization
 
 on:
   schedule:
-    - cron: '21 6 * * *'   # Runs daily at 10:00 UTC
+    - cron: '24 6 * * *'   # Runs daily at 10:00 UTC
   workflow_dispatch:        # Manual trigger
 
 env:
   SOURCE_BRANCH: b1
   DESTINATION_BRANCHES: b2,b3
-  LINES_CHANGED_THRESHOLD: 100
+  LINES_CHANGED_THRESHOLD: 0
 
 jobs:
   auto-sync:
