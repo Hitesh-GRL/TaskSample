@@ -1,26 +1,30 @@
-name: Automated Branch Sync
+name: Automated Branch Synchronization
 
 on:
   schedule:
-    - cron: '0 10 * * *'  # Runs daily at 10:00 UTC
-  workflow_dispatch:
+    - cron: '0 10 * * *'   # Executes daily at 10:00 UTC
+  workflow_dispatch:        # Manual trigger as well
+
+env:
+  SOURCE_BRANCH: b1
+  DESTINATION_BRANCHES: b2,b3
+  LINES_CHANGED_THRESHOLD: 100
 
 jobs:
-  sync-branches:
+  auto-sync:
     runs-on: ubuntu-latest
 
-    env:
-      SOURCE_BRANCH: develop
-      DEST_BRANCHES: main,qa,staging
-      LINE_THRESHOLD: 100
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for diffing
+          fetch-depth: 0
 
-      - name: Set up Git
+      - name: Set up Git config
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
@@ -28,36 +32,42 @@ jobs:
       - name: Install GitHub CLI
         uses: actions/setup-gh@v1
 
-      - name: Authenticate with GitHub CLI
+      - name: Authenticate GitHub CLI with GitHub Token
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Check for changes and create PRs
+      - name: Compare branches and create PRs if needed
         run: |
-          IFS=',' read -ra DESTS <<< "$DEST_BRANCHES"
-          for dest in "${DESTS[@]}"; do
-            echo "Checking changes from $SOURCE_BRANCH → $dest"
-            git fetch origin $SOURCE_BRANCH $dest
+          IFS=',' read -ra DESTS <<< "$DESTINATION_BRANCHES"
 
-            # Get line diff
-            lines_changed=$(git diff origin/$dest..origin/$SOURCE_BRANCH --shortstat | awk '{print $4 + $6}')
-            lines_changed=${lines_changed:-0}
-            echo "Total lines changed: $lines_changed"
+          for TARGET_BRANCH in "${DESTS[@]}"; do
+            echo "🔍 Checking diff from $SOURCE_BRANCH → $TARGET_BRANCH"
+            git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
 
-            if [[ "$lines_changed" -gt "$LINE_THRESHOLD" ]]; then
-              echo "Sync needed → Creating PR from $SOURCE_BRANCH to $dest"
+            # Get line change stats
+            DIFF_STATS=$(git diff origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH --shortstat)
+            echo "Diff stats: $DIFF_STATS"
 
-              PR_EXISTS=$(gh pr list --base $dest --head $SOURCE_BRANCH --json number --jq 'length')
+            ADDED=$(echo "$DIFF_STATS" | grep -oP '\d+(?= insertions)' || echo "0")
+            DELETED=$(echo "$DIFF_STATS" | grep -oP '\d+(?= deletions)' || echo "0")
+            TOTAL_CHANGED=$((ADDED + DELETED))
+
+            echo "📈 Total lines changed: $TOTAL_CHANGED"
+
+            if [ "$TOTAL_CHANGED" -gt "$LINES_CHANGED_THRESHOLD" ]; then
+              echo " Sync required: threshold exceeded."
+
+              PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
               if [[ "$PR_EXISTS" -eq "0" ]]; then
                 gh pr create \
-                  --base $dest \
-                  --head $SOURCE_BRANCH \
-                  --title "Sync: $SOURCE_BRANCH → $dest" \
-                  --body "Automated sync triggered due to $lines_changed lines changed." \
+                  --base "$TARGET_BRANCH" \
+                  --head "$SOURCE_BRANCH" \
+                  --title "Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
+                  --body "Automated sync triggered: $TOTAL_CHANGED line changes detected.\n\nPlease review and merge." \
                   --label "auto-sync"
               else
-                echo "PR already exists from $SOURCE_BRANCH → $dest"
+                echo "PR already exists for $SOURCE_BRANCH → $TARGET_BRANCH"
               fi
             else
-              echo "No sync needed for $SOURCE_BRANCH → $dest"
+              echo "Threshold not met. No sync needed."
             fi
           done
