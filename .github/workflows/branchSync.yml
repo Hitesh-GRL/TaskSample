@@ -2,7 +2,7 @@ name: Automated Branch Synchronization
 
 on:
   schedule:
-    - cron: '0 10 * * *'   # Runs daily at 10:00 UTC
+    - cron: '21 6 * * *'   # Runs daily at 10:00 UTC
   workflow_dispatch:        # Manual trigger
 
 env:
