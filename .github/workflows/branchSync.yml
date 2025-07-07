@@ -2,8 +2,8 @@ name: Automated Branch Synchronization
 
 on:
   schedule:
-    - cron: '0 10 * * *'   # Executes daily at 10:00 UTC
-  workflow_dispatch:        # Manual trigger as well
+    - cron: '0 10 * * *'   # Runs daily at 10:00 UTC
+  workflow_dispatch:        # Manual trigger
 
 env:
   SOURCE_BRANCH: b1
@@ -22,28 +22,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history for diff
 
       - name: Set up Git config
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
 
-      - name: Install GitHub CLI
-        uses: actions/setup-gh@v1
-
-      - name: Authenticate GitHub CLI with GitHub Token
+      - name: Authenticate GitHub CLI
         run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
 
-      - name: Compare branches and create PRs if needed
+      - name: Compare and Sync Branches
         run: |
           IFS=',' read -ra DESTS <<< "$DESTINATION_BRANCHES"
 
           for TARGET_BRANCH in "${DESTS[@]}"; do
-            echo "🔍 Checking diff from $SOURCE_BRANCH → $TARGET_BRANCH"
+            echo "🔍 Checking diff: $SOURCE_BRANCH → $TARGET_BRANCH"
             git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
 
-            # Get line change stats
             DIFF_STATS=$(git diff origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH --shortstat)
             echo "Diff stats: $DIFF_STATS"
 
@@ -54,20 +50,20 @@ jobs:
             echo "📈 Total lines changed: $TOTAL_CHANGED"
 
             if [ "$TOTAL_CHANGED" -gt "$LINES_CHANGED_THRESHOLD" ]; then
-              echo " Sync required: threshold exceeded."
+              echo "✅ Change threshold met: proceeding with PR."
 
               PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
               if [[ "$PR_EXISTS" -eq "0" ]]; then
                 gh pr create \
                   --base "$TARGET_BRANCH" \
                   --head "$SOURCE_BRANCH" \
-                  --title "Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
-                  --body "Automated sync triggered: $TOTAL_CHANGED line changes detected.\n\nPlease review and merge." \
+                  --title "🔄 Auto Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
+                  --body "Automated sync due to $TOTAL_CHANGED line changes.\n\nPlease review." \
                   --label "auto-sync"
               else
-                echo "PR already exists for $SOURCE_BRANCH → $TARGET_BRANCH"
+                echo "ℹ️ PR already exists: $SOURCE_BRANCH → $TARGET_BRANCH"
               fi
             else
-              echo "Threshold not met. No sync needed."
+              echo "❌ No sync needed for $TARGET_BRANCH — changes below threshold."
             fi
           done
