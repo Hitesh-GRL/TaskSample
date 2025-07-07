@@ -62,7 +62,7 @@ jobs:
                   --label "auto-sync"
               fi
             else
-              echo "🔕 Threshold not met for $TARGET_BRANCH"
+              echo "❌ Threshold not met for $TARGET_BRANCH"
             fi
           done
 
