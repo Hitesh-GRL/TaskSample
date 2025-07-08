@@ -94,27 +94,31 @@ jobs:
         run: |
           IFS=',' read -ra DESTS <<< "$DESTINATION_BRANCHES"
           for TARGET_BRANCH in "${DESTS[@]}"; do
-            git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
-            git checkout -b temp-merge origin/$TARGET_BRANCH
+           git fetch origin $SOURCE_BRANCH $TARGET_BRANCH
 
-            echo "🧪 Test merge $SOURCE_BRANCH into $TARGET_BRANCH"
-            if git merge --no-commit --no-ff origin/$SOURCE_BRANCH; then
-              echo "✅ No conflict: Creating PR..."
+           MERGE_BRANCH=merge-test-to-$TARGET_BRANCH
+           git checkout -b $MERGE_BRANCH origin/$TARGET_BRANCH
 
-              PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
-              if [ "$PR_EXISTS" -eq "0" ]; then
-                gh pr create \
-                  --base "$TARGET_BRANCH" \
-                  --head "$SOURCE_BRANCH" \
-                  --title "🔄 Daily Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
-                  --body "Conflict-free daily sync." \
-                  --label "auto-sync"
-              else
-                echo "ℹ️ PR already exists"
-              fi
-            else
-              echo "❌ Conflicts found: Skipping PR to $TARGET_BRANCH"
-            fi
+           echo "🧪 Test merge $SOURCE_BRANCH into $TARGET_BRANCH"
+           if git merge --no-commit --no-ff origin/$SOURCE_BRANCH; then
+             echo "✅ No conflict: Creating PR..."
 
-            git merge --abort || true
+             PR_EXISTS=$(gh pr list --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq 'length')
+             if [ "$PR_EXISTS" -eq "0" ]; then
+               gh pr create \
+                 --base "$TARGET_BRANCH" \
+                 --head "$SOURCE_BRANCH" \
+                 --title "🔄 Daily Sync: $SOURCE_BRANCH → $TARGET_BRANCH" \
+                 --body "Conflict-free daily sync." \
+                 --label "auto-sync"
+             else
+               echo "ℹ️ PR already exists for $SOURCE_BRANCH → $TARGET_BRANCH"
+             fi
+           else
+             echo "❌ Merge conflict detected for $TARGET_BRANCH"
+           fi
+
+           git merge --abort || true
+           git checkout $SOURCE_BRANCH
+           git branch -D $MERGE_BRANCH || true
           done
